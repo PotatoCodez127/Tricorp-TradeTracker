@@ -5,10 +5,11 @@
 #property copyright "TriCorp"
 #property link      "https://your-dashboard.com"
 #property version   "1.00"
+#property strict
 
 // Input for the user's unique dashboard ID or API key
 input string InpUserToken = "USER_SECRET_TOKEN_123"; 
-input string InpWebhookURL = "https://your-server.com/api/webhook";
+input string InpWebhookURL = "http://127.0.0.1:8000/api/webhook";
 
 int OnInit() {
    // Run the sync every 60 seconds
@@ -34,11 +35,18 @@ void SyncTrades() {
       return;
    }
    
-   int deals_total = HistoryDealsTotal();
-   string json_deals = "[";
-   bool first = true;
-   
-   for(int i = 0; i < deals_total; i++) {
+    int deals_total = HistoryDealsTotal();
+    Print("Processing ", deals_total, " deals for Account ", AccountInfoInteger(ACCOUNT_LOGIN));
+    
+    if(deals_total == 0) {
+       Print("No closed deals found in last 30 days");
+       return;
+    }
+    
+    string json_deals = "[";
+    bool first = true;
+    
+    for(int i = 0; i < deals_total; i++) {
       ulong deal_ticket = HistoryDealGetTicket(i);
       long deal_type = HistoryDealGetInteger(deal_ticket, DEAL_TYPE);
       
@@ -64,19 +72,22 @@ void SyncTrades() {
    }
    json_deals += "]";
    
-   // Prepare WebRequest
-   string payload = StringFormat("{\"token\":\"%s\",\"account\":%lld,\"deals\":%s}", InpUserToken, AccountInfoInteger(ACCOUNT_LOGIN), json_deals);
+    // Prepare WebRequest
+    string payload = StringFormat("{\"token\":\"%s\",\"account\":%lld,\"deals\":%s}", InpUserToken, AccountInfoInteger(ACCOUNT_LOGIN), json_deals);
+    string headers = "Content-Type: application/json";
+    
+    char postData[];
+    char result[];
+    string recvHeaders;
+    
+    StringToCharArray(payload, postData, 0, WHOLE_ARRAY, CP_UTF8);
+    
+    // Send to your backend
+    int res = WebRequest("POST", InpWebhookURL, headers, 5000, postData, result, recvHeaders);
    
-   char postData[], result[];
-   string headers = "Content-Type: application/json\r\n";
-   StringToCharArray(payload, postData, 0, WHOLE_ARRAY, CP_UTF8);
-   
-   // Send to your backend
-   int res = WebRequest("POST", InpWebhookURL, headers, 5000, postData, result, headers);
-   
-   if(res == 200) {
-      Print("Successfully synced trades with TriCorp Server.");
-   } else {
-      Print("Sync failed. Error code: ", res);
-   }
+    if(res == 200) {
+       Print("[OK] Successfully synced ", deals_total, " trades (Account: ", AccountInfoInteger(ACCOUNT_LOGIN), ")");
+    } else {
+       Print("[ERROR] Sync failed - Error code: ", res, " | Webhook: ", InpWebhookURL, " | Account: ", AccountInfoInteger(ACCOUNT_LOGIN));
+    }
 }
