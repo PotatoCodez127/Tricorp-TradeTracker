@@ -21,40 +21,57 @@ user_data = {}
 WEBHOOK_TOKEN = "USER_SECRET_TOKEN_123"
 
 def log(msg: str):
+    """Print with full context to terminal"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {msg}")
+    print(f"[{timestamp}] {msg}", flush=True)
 
 def fetch_mt5_history(account_id: str):
     """Fetch historical trades from MetaTrader 5"""
+    print(f"[MT5.HISTORY] === START ===")
+    print(f"[MT5.HISTORY] Account ID: '{account_id}' (type={type(account_id).__name__})")
+    
+    if not account_id or account_id == 'null':
+        print(f"[MT5.HISTORY] ERROR: Empty/null account ID")
+        return []
+    
     try:
+        print(f"[MT5.HISTORY] Importing MetaTrader5...")
         import MetaTrader5 as mt5
-        if not mt5.initialize():
-            log(f"[WARN] MT5 not initialized (terminal not running?)")
-            return []
+        print(f"[MT5.HISTORY] MT5 imported")
         
-        # Get account info to verify we're connected to the right account
+        if not mt5.initialize():
+            print(f"[MT5.HISTORY] ERROR: mt5.initialize() failed")
+            return []
+        print(f"[MT5.HISTORY] MT5 initialized")
+        
         account_info = mt5.account_info()
-        log(f"[DEBUG] Account login: {account_info.login}, requested: {account_id}")
+        print(f"[MT5.HISTORY] Account login: {account_info.login}, name: {account_info.name}")
+        
         if account_info.login != int(account_id):
-            log(f"[WARN] Connected to account {account_info.login}, requested {account_id}")
+            print(f"[MT5.HISTORY] ERROR: Account mismatch (got {account_info.login}, expected {account_id})")
             mt5.shutdown()
             return []
+        print(f"[MT5.HISTORY] Account match verified")
         
         today = datetime.now()
-        # Fetch entire history (start from 10 years ago)
         start_date = today - timedelta(days=3650)
+        print(f"[MT5.HISTORY] Date range: {start_date} to {today}")
         
         history = mt5.history_deals_get(start_date, today)
+        print(f"[MT5.HISTORY] history_deals_get returned: {len(history) if history else 0} deals")
         
         if history is None:
-            log(f"[ERROR] history_deals_get() failed: {mt5.last_error()}")
+            print(f"[MT5.HISTORY] ERROR: history_deals_get() returned None")
+            print(f"[MT5.HISTORY] MT5 Error: {mt5.last_error()}")
             mt5.shutdown()
             return []
         
         trades = []
+        balance = 10000  # Starting balance
         for deal in history:
             if deal.entry == mt5.DEAL_ENTRY_OUT:
                 profit = deal.profit + deal.commission + deal.swap
+                balance += profit
                 trades.append({
                     "id": str(deal.ticket),
                     "symbol": deal.symbol,
@@ -63,18 +80,25 @@ def fetch_mt5_history(account_id: str):
                     "openPrice": round(deal.price, 5),
                     "closePrice": round(deal.price, 5),
                     "profit": round(profit, 2),
+                    "balance": round(balance, 2),
                     "date": datetime.fromtimestamp(deal.time).strftime('%Y-%m-%d')
                 })
         
+        print(f"[MT5.HISTORY] Filtered {len(trades)} ENTRY_OUT trades")
+        if trades:
+            print(f"[MT5.HISTORY] First 3 trades:")
+            for t in trades[:3]:
+                print(f"[MT5.HISTORY]   - {t['symbol']} {t['type']} ${t['profit']}")
+        
         mt5.shutdown()
-        log(f"[OK] Fetched {len(trades)} closed deals from MT5 for Account {account_id}")
+        print(f"[MT5.HISTORY] === END: {len(trades)} trades ===")
         return trades
         
     except ImportError:
-        log("[WARN] MetaTrader5 module not loaded")
+        print(f"[MT5.HISTORY] ERROR: MetaTrader5 module not available")
         return []
     except Exception as e:
-        log(f"[WARN] MT5 error (is terminal running?): {e}")
+        print(f"[MT5.HISTORY] ERROR: {type(e).__name__}: {e}")
         return []
 
 
@@ -100,7 +124,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     for error in exc.errors():
         field = ".".join(str(loc) for loc in error["loc"])
         error_details.append(f"{field}: {error['msg']}")
-    log(f"[ERROR] Validation error: {', '.join(error_details)}")
+    log(f"[ERROR] Validation: {', '.join(error_details)}")
     return JSONResponse(status_code=400, content={"detail": error_details})
 
 
@@ -118,8 +142,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.post("/api/webhook")
 async def receive_mt5_data(payload: WebhookPayload):
+    print(f"[WEBHOOK] Request from Account {payload.account}")
+    
     if payload.token != WEBHOOK_TOKEN:
-        log(f"[ERROR] Webhook rejected: Invalid token '{payload.token}' (Account: {payload.account})")
+        log(f"[ERROR] Webhook rejected: Invalid token for Account {payload.account}")
         raise HTTPException(status_code=401, detail="Invalid token")
     
     if payload.account <= 0:
@@ -129,7 +155,7 @@ async def receive_mt5_data(payload: WebhookPayload):
     formatted_trades = []
     for d in payload.deals:
         if not d.symbol or len(d.symbol) < 2:
-            log(f"[ERROR] Skipped invalid trade (ticket {d.ticket}): empty symbol")
+            log(f"[ERROR] Skipped invalid trade: {d.ticket} - empty symbol")
             continue
         date_str = datetime.utcfromtimestamp(d.time).strftime('%Y-%m-%d')
         formatted_trades.append({
@@ -145,52 +171,38 @@ async def receive_mt5_data(payload: WebhookPayload):
     
     account_str = str(payload.account)
     user_data[account_str] = formatted_trades
-    log(f"[OK] Webhook processed: Account {payload.account}, {len(formatted_trades)} trades")
+    log(f"[WEBHOOK] Stored {len(formatted_trades)} trades for Account {payload.account}")
     
     return {"status": "success", "deals_processed": len(formatted_trades)}
 
 
 @app.get("/api/trades/{account_id}")
 async def get_trades(account_id: str):
-    log(f"[INFO] GET /api/trades/{account_id}")
+    print(f"[API.GET] Request for Account '{account_id}'")
+    print(f"[API.GET] user_data keys: {list(user_data.keys())}")
     
-    # First check if we have cached data from webhook
     if account_id in user_data:
         trades = user_data[account_id]
-        log(f"[OUT] Cached: {len(trades)} trades for Account {account_id}")
-        log(f"  [SHOWING] First trade: {trades[0]}")
+        print(f"[API.GET] Found {len(trades)} trades in cache")
         return trades
     
-    # No cached data, fetch from MT5 history
-    log(f"[INFO] Fetching {account_id} from MT5 history")
+    print(f"[API.GET] Not in cache, fetching from MT5...")
     trades = fetch_mt5_history(account_id)
+    print(f"[API.GET] MT5 returned {len(trades)} trades")
     
     if trades:
         user_data[account_id] = trades
-        log(f"[OUT] MT5 History: {len(trades)} trades for Account {account_id}")
-        log(f"  [SHOWING TRADES]")
-        for i, t in enumerate(trades[:3]):  # Show first 3
-            log(f"    Trade {i+1}: {t['symbol']} {t['type']} profit=${t['profit']}")
-        if len(trades) > 3:
-            log(f"    ... and {len(trades) - 3} more trades")
-    else:
-        log(f"[INFO] No data for Account {account_id}")
+        print(f"[API.GET] Stored in cache")
+    
+    print(f"[API.GET] Returning {len(trades)} trades")
     return trades
 
 
 @app.get("/api/history/{account_id}")
 async def get_history(account_id: str):
-    """Directly fetch MT5 history (bypass cache)"""
-    log(f"[INFO] GET /api/history/{account_id}")
+    print(f"[API.HISTORY] Request for Account '{account_id}'")
     trades = fetch_mt5_history(account_id)
-    log(f"[INFO] History endpoint returned {len(trades)} trades")
-    
-    # Show trades in terminal for visibility
-    if trades:
-        log(f"  [TRADE LIST]")
-        for t in trades[:5]:
-            log(f"    - {t['symbol']} {t['type']} ${t['profit']}")
-    
+    print(f"[API.HISTORY] Returning {len(trades)} trades")
     return trades
 
 
@@ -200,12 +212,10 @@ async def health_check():
 
 
 if __name__ == "__main__":
-    import os
     log("=" * 50)
     log(f"[START] Starting TriCorp TradeTracker Backend")
     log(f"[HOST] Listening on http://0.0.0.0:8000")
     log(f"[KEY] Webhook token: {WEBHOOK_TOKEN}")
     log(f"[OK] Python version: {sys.version.split()[0]}")
-    log(f"[OK] Webhook.py path: {os.path.abspath(__file__)}")
     log("=" * 50)
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="debug")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")

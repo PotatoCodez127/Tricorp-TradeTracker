@@ -17,7 +17,14 @@ def dashboard():
 def proxy_api(path):
     backend_url = f'http://127.0.0.1:8000/api/{path}'
     
-    print(f"[FLASK PROXY] {request.method} /api/{path} -> {backend_url}")
+    print(f"[FLASK PROXY] === Request Start ===")
+    print(f"[FLASK PROXY] {request.method} /api/{path}")
+    print(f"[FLASK PROXY] Remote IP: {request.remote_addr}")
+    print(f"[FLASK PROXY] User-Agent: {request.user_agent}")
+    print(f"[FLASK PROXY] Headers: {dict(request.headers)}")
+    print(f"[FLASK PROXY] Query params: {request.args}")
+    print(f"[FLASK PROXY] Body length: {len(request.get_data()) if request.get_data() else 0}")
+    print(f"[FLASK PROXY] -> {backend_url}")
     
     resp = requests.request(
         method=request.method,
@@ -27,7 +34,11 @@ def proxy_api(path):
         params=request.args
     )
     
-    print(f"[FLASK PROXY] Backend responded: {resp.status_code}, {resp.text[:100]}")
+    print(f"[FLASK PROXY] === Response ===")
+    print(f"[FLASK PROXY] Status: {resp.status_code}")
+    print(f"[FLASK PROXY] Response length: {len(resp.content) if resp.content else 0}")
+    print(f"[FLASK PROXY] Response content (first 200 chars): {resp.text[:200]}")
+    print(f"[FLASK PROXY] === End Response ===")
     
     return Response(
         resp.content,
